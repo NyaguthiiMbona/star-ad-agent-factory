@@ -12,13 +12,20 @@ def load_prompt(filepath):
     return ""
 
 def select_angle(category):
+    """Dynamically matches target category to the best pitch angle in copywriter.md."""
     cat_lower = category.lower()
-    if any(k in cat_lower for k in ["agri", "food", "farmer", "climate", "environment", "conservation"]):
-        return "Angle A: Agriculture & Climate"
-    elif any(k in cat_lower for k in ["health", "child", "sanitation", "water", "humanitarian", "disability"]):
+    
+    # Angle A: Agriculture & Climate
+    if any(k in cat_lower for k in ["agri", "food", "farmer", "climate", "environment", "conservation", "water"]):
+        return "Angle A: Agriculture, Climate & Rural Development"
+    
+    # Angle B: Health & Social Impact
+    elif any(k in cat_lower for k in ["health", "child", "sanitation", "humanitarian", "disability", "education", "nutrition"]):
         return "Angle B: Health, Education & Social Impact"
+    
+    # Angle C: Governance & Public Diplomacy (Default for Embassies / Multilaterals)
     else:
-        return "Angle C: Public Diplomacy, Soft Power & Governance"
+        return "Angle C: Public Diplomacy, Soft Power & Civic Governance"
 
 def generate_pitches():
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -31,7 +38,7 @@ def generate_pitches():
 
     targets_file = "data/targets.csv"
     if not os.path.exists(targets_file):
-        print("Targets file not found.")
+        print("Error: targets.csv file not found.")
         return
 
     output_dir = "generated_pitches"
@@ -53,10 +60,10 @@ def generate_pitches():
 
         for row in reader:
             status = row.get("Status", "Pending")
-            outreach_count = int(row.get("Outreach_Count", 0))
+            outreach_count = int(row.get("Outreach_Count", 0)) if row.get("Outreach_Count") else 0
             last_date_str = row.get("Last_Contacted_Date", "")
 
-            # Check 30-Day Cooldown
+            # Evaluate 30-Day Cooldown Status
             in_cooldown = False
             if last_date_str:
                 try:
@@ -66,50 +73,61 @@ def generate_pitches():
                 except ValueError:
                     pass
 
+            # Skip won or active prospects
             if status in ["Replied", "Won"]:
                 print(f"Skipping {row['Organization']} (Status: {status})")
                 updated_rows.append(row)
                 continue
 
+            # Check if currently sitting in 30-day cooldown
             if status == "Archived" and in_cooldown:
-                print(f"Skipping {row['Organization']} - In 30-day cooldown period until {(last_date + timedelta(days=30)).strftime('%Y-%m-%d')}")
+                days_left = 30 - (today - last_date).days
+                print(f"Skipping {row['Organization']} - Active cooldown ({days_left} days remaining).")
                 updated_rows.append(row)
                 continue
 
-            # Reset status if cooldown has passed
+            # Reset status after 30-day cooldown completes for re-engagement
             if status == "Archived" and not in_cooldown:
-                print(f"Re-engaging {row['Organization']} - 30 days passed! Resetting for new seasonal angle pitch.")
+                print(f"Re-engaging {row['Organization']} - 30 days passed! Resetting for new pitch cycle.")
                 status = "Pending"
                 outreach_count = 0
 
             outreach_count += 1
             pitch_angle = select_angle(row.get("Category", ""))
 
+            # Tailor urgency based on touch count (Wed pitch vs Mon deadline follow-up)
             if outreach_count == 1:
                 pitch_type = f"INITIAL PITCH ({pitch_angle})"
-                urgency_note = "Focus on Tuesday MyGov 100k nationwide copy distribution."
+                urgency_note = (
+                    "Focus on reaching 100,000 physical copies distributed across all 47 sub-counties "
+                    "via the Tuesday MyGov pullout, bridging rural and grassroots communication gaps."
+                )
             else:
                 pitch_type = f"FOLLOW-UP REMINDER ({pitch_angle})"
-                urgency_note = "Remind them Tuesday edition bookings close Friday at 10:00 AM EAT for artwork and order processing."
+                urgency_note = (
+                    "Create gentle urgency: Tuesday print bookings, artwork submission, and order orders "
+                    "must be finalized by Friday at 10:00 AM EAT."
+                )
 
-            print(f"Processing Pitch #{outreach_count} [{pitch_angle}] for: {row['Organization']}...")
+            print(f"[{outreach_count}/2] Generating pitch for {row['Organization']} using [{pitch_angle}]...")
 
             user_prompt = f"""
             Pitch Type: {pitch_type}
             Target Organization: {row['Organization']}
-            Location: {row['Location']}
+            Location/Base: {row['Location']}
             Category: {row['Category']}
             Contact Person: {row['Contact_Name']}
             Campaign Focus: {row['Campaign_Focus']}
 
-            Selected Pitch Angle: {pitch_angle}
-            Context/Urgency: {urgency_note}
+            Selected Sector Angle: {pitch_angle}
+            Campaign Urgency / Context: {urgency_note}
 
-            Sender Details:
+            Sender Signature Details:
             {sender_name} | {sender_title} ({sender_company})
             Email: {sender_email} | Phone: {sender_phone}
 
-            Task: Write a fresh, highly compelling cold sales pitch email targeting {row['Contact_Name']}. Sign off with sender details.
+            Task: Write a highly tailored, professional B2B cold sales pitch email (Subject line + Body) targeting {row['Contact_Name']}. 
+            Apply the specified Sector Angle and end with the exact provided sender signature.
             """
 
             try:
@@ -128,16 +146,17 @@ def generate_pitches():
                 with open(filename, "w", encoding="utf-8") as out_file:
                     out_file.write(f"# Touch #{outreach_count} Pitch for {row['Organization']}\n\n")
                     out_file.write(f"**Target Email:** {row['Email']}\n")
-                    out_file.write(f"**Angle Used:** {pitch_angle}\n")
-                    out_file.write(f"**Date:** {today_str}\n\n")
+                    out_file.write(f"**Sector Angle:** {pitch_angle}\n")
+                    out_file.write(f"**Generated On:** {today_str}\n\n")
                     out_file.write("----\n\n")
                     out_file.write(response.text)
 
+                # Update row state
                 row["Outreach_Count"] = str(outreach_count)
                 row["Last_Contacted_Date"] = today_str
                 row["Status"] = "Touched_1" if outreach_count == 1 else "Archived"
 
-                print(f" Done! Saved to {filename}")
+                print(f" Done! Pitch saved to {filename}")
                 time.sleep(1)
 
             except Exception as e:
@@ -145,6 +164,7 @@ def generate_pitches():
 
             updated_rows.append(row)
 
+    # Write updated CSV back to dataset
     with open(targets_file, mode="w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
