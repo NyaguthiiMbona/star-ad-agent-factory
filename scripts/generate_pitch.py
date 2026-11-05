@@ -12,7 +12,7 @@ def load_prompt(filepath):
     return ""
 
 def select_angle(category):
-    """Maps the 14 normalized DeepSeek categories to optimal pitch angles."""
+    """Maps DeepSeek's 14 normalized categories to optimal pitch angles."""
     cat = category.strip()
     
     # Angle A: Agriculture, Climate & Rural Development
@@ -102,7 +102,7 @@ def generate_pitches():
             else:
                 pitch_type = f"FOLLOW-UP REMINDER ({pitch_angle})"
                 urgency_note = (
-                    "Create gentle urgency: Tuesday print bookings, artwork submission, and order orders "
+                    "Create gentle urgency: Tuesday print bookings, artwork submission, and orders "
                     "must be finalized by Friday at 10:00 AM EAT."
                 )
 
