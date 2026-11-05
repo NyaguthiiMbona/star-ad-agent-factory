@@ -3,6 +3,9 @@ name: Ad Agent Pipeline
 on:
   workflow_dispatch: # Allows you to run it manually anytime from GitHub website
 
+permissions:
+  contents: write
+
 jobs:
   run-agents:
     runs-on: ubuntu-latest
