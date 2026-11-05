@@ -25,10 +25,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/generate_pitch.py
 
-      - name: Commit and Push Updated Targets CSV
+      - name: Commit and Push Generated Pitches and Updated Targets
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-          git add data/targets.csv
-          git diff --staged --quiet || git commit -m "chore: update outreach status and dates in targets.csv [skip ci]"
+          git add data/targets.csv generated_pitches/
+          git diff --staged --quiet || git commit -m "chore: generate pitch drafts and update outreach tracker [skip ci]"
           git push
