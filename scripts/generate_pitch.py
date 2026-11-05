@@ -40,16 +40,18 @@ def get_pitch_angle(category):
 
 
 def discover_new_prospects(client, existing_orgs):
-  """Scouts fresh local and international B2B prospects operating in Kenya."""
+  """Scouts fresh international NGOs, regional bodies, and donor-funded agencies operating in Kenya."""
   print(
-      "Scouting for fresh local and international prospects (NGOs, Agencies,"
-      " Enterprises)..."
+      "Scouting for fresh international NGOs, regional bodies, and donor-funded"
+      " agencies operating in Kenya..."
   )
   prompt = """
-    Identify 5 active international organizations, NGOs, or major commercial enterprises operating in Kenya (including local enterprises or international bodies like UN agencies, USAID partners, or agricultural/health firms) that would benefit from advertising in a major national media outlet like The Star's MyGov pullout.
+    Identify 5 active international organizations, regional development bodies, UN specialized agencies, donor-funded agricultural/health/climate projects, or major INGOs operating regional offices in Kenya (e.g., USAID/FCDO/GIZ implementing partners, CGIAR centers, FAO, AGRA, TradeMark Africa, or similar entities) that require public stakeholder engagement, policy dissemination, or grassroots awareness campaigns across Kenya.
+    
     Return ONLY a valid CSV format (without markdown code blocks) with these exact headers:
     Organization_Name,Category,Contact_Email,Status,Outreach_Count,Last_Contacted_Date
-    Ensure realistic placeholder emails or public contact domains, and make sure they are distinct from these already known organizations:
+    
+    Ensure realistic institutional domain emails (e.g., communications@, info@, partnerships@ domain), and make sure they are distinct from these already known organizations:
     """ + ", ".join(
       list(existing_orgs)[:20]
   )
@@ -68,14 +70,15 @@ def discover_new_prospects(client, existing_orgs):
     reader = csv.DictReader(text.splitlines())
     new_rows = []
     for row in reader:
-      if row.get("Organization_Name") and row.get(
-          "Organization_Name"
-      ) not in existing_orgs:
+      org_name = row.get("Organization_Name", "").strip()
+      if org_name and org_name not in existing_orgs:
         new_rows.append({
-            "Organization_Name": row["Organization_Name"].strip(),
-            "Category": row.get("Category", "General B2B").strip(),
+            "Organization_Name": org_name,
+            "Category": row.get(
+                "Category", "Public Diplomacy, Soft Power & Civic Governance"
+            ).strip(),
             "Contact_Email": row.get(
-                "Contact_Email", "info@organization.org"
+                "Contact_Email", "partnerships@organization.org"
             ).strip(),
             "Status": "Pending",
             "Outreach_Count": "0",
@@ -166,14 +169,17 @@ def main():
       )
       prompt = f"""
       You are an expert B2B media sales director for The Star newspaper in Kenya (focusing on the high-impact MyGov national pullout).
-      Write a polite, concise, and respectful second-touch follow-up email to {org_name} ({category} sector).
+      Write a polite, concise, and respectful second-touch follow-up email to the Communications or Partnerships Officer at {org_name} ({category} sector).
       
-      The first pitch was sent ~4 weeks ago. This follow-up should politely bump the conversation, acknowledge their busy schedule, and reiterate the value of national institutional visibility across Kenya through The Star's platform under strategic angle: {angle}.
+      The first pitch was sent ~4 weeks ago. This follow-up should politely bump the conversation, acknowledge their busy schedule, and reiterate how partnering with The Star satisfies donor requirements for grassroots policy dissemination and public awareness across Kenya under strategic angle: {angle}.
+      
+      CRITICAL FORMAT REQUIREMENT:
+      Provide a professional, peer-to-peer subject line (e.g., focusing on grassroots reach, stakeholder engagement, or public awareness for {org_name}) followed by a short, courteous email body.
       
       Format your response cleanly with:
-      Subject: [Compelling Follow-Up Subject Line]
+      Subject: [Compelling Institutional Subject Line]
       
-      [Email Body - Short, courteous follow-up pitch with a clear call to action]
+      [Email Body - Short, professional follow-up with a clear call to action]
       """
     else:
       print(
@@ -182,15 +188,18 @@ def main():
       )
       prompt = f"""
       You are an expert B2B media sales director for The Star newspaper in Kenya (focusing on the high-impact MyGov national pullout).
-      Write a tailored, professional, and respectful B2B partnership pitch email to {org_name}, which operates in the '{category}' sector.
+      Write a tailored, professional, and respectful B2B partnership pitch email to the Communications or Partnerships Officer at {org_name}, which operates in the '{category}' sector.
       
       The pitch must align with this strategic angle: {angle}.
-      Emphasize national reach, institutional visibility, and audience engagement across Kenya through The Star's platform.
+      Emphasize institutional visibility, donor compliance, public participation, and nationwide grassroots reach across Kenya through The Star's platform rather than generic commercial advertising.
+      
+      CRITICAL FORMAT REQUIREMENT:
+      Provide a clean, non-spammy subject line that highlights public outreach, regional impact, or community engagement for {org_name}.
       
       Format your response cleanly with:
-      Subject: [Compelling Subject Line]
+      Subject: [Compelling Institutional Subject Line]
       
-      [Email Body - Professional, concise, punchy B2B pitch with a clear call to action]
+      [Email Body - Professional, concise, peer-to-peer B2B pitch focusing on institutional reach and compliance, with a clear call to action]
       """
 
     # Retry logic for 503 high demand errors
@@ -229,7 +238,7 @@ def main():
             f"# {'Follow-Up' if is_follow_up else 'Pitch'} Draft for"
             f" {org_name}\n\n"
         )
-        out_f.write(f"**Stage:** {'Touch 2 (Follow-Up)'}\n")
+        out_f.write(f"**Stage:** {'Touch 2 (Follow-Up)' if is_follow_up else 'Touch 1 (Initial Pitch)'}\n")
         out_f.write(f"**Target Contact:** {row.get('Contact_Email', 'N/A')}\n")
         out_f.write(f"**Target Category:** {category}\n")
         out_f.write(f"**Assigned Angle:** {angle}\n")
@@ -240,25 +249,4 @@ def main():
       if is_follow_up:
         row["Status"] = "Touched_2"
       else:
-        row["Status"] = "Touched_1"
-
-      row["Outreach_Count"] = str(outreach_count + 1)
-      row["Last_Contacted_Date"] = today.strftime("%Y-%m-%d")
-      processed_count += 1
-
-    time.sleep(3)
-
-  # Save updated targets back to CSV
-  with open(CSV_PATH, mode="w", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-
-  print(
-      f"Pipeline run completed. Processed {processed_count} emails and updated"
-      " targets.csv."
-  )
-
-
-if __name__ == "__main__":
-  main()
+        row["Status
