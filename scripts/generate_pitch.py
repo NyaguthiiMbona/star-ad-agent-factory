@@ -40,7 +40,7 @@ def get_pitch_angle(category):
 
 
 def discover_new_prospects(client, existing_orgs):
-  """Uses Gemini to scout fresh local and international B2B prospects operating in Kenya."""
+  """Scouts fresh local and international B2B prospects operating in Kenya."""
   print(
       "Scouting for fresh local and international prospects (NGOs, Agencies,"
       " Enterprises)..."
@@ -60,7 +60,6 @@ def discover_new_prospects(client, existing_orgs):
         contents=prompt,
     )
     text = response.text.strip()
-    # Clean potential markdown block wrappers
     if text.startswith("```"):
       text = text.split("```")[1]
       if text.startswith("csv"):
@@ -92,7 +91,6 @@ def main():
   os.makedirs(OUTPUT_DIR, exist_ok=True)
   client = genai.Client()
 
-  # 1. Read existing targets
   rows = []
   fieldnames = [
       "Organization_Name",
@@ -113,7 +111,7 @@ def main():
 
   existing_orgs = {r.get("Organization_Name") for r in rows}
 
-  # 2. If pending list is low, trigger discovery agent to scrape/scout fresh leads
+  # If pending list is low, trigger discovery agent
   pending_rows = [r for r in rows if r.get("Status", "Pending") == "Pending"]
   if len(pending_rows) < 5:
     scouted = discover_new_prospects(client, existing_orgs)
@@ -124,40 +122,78 @@ def main():
   today = datetime.now().date()
   processed_count = 0
 
-  # 3. Process batch up to MAX_BATCH_SIZE (10 targets max)
+  # Categorize targets into execution queues
+  # Queue 1: Follow-ups due (Touched_1 and >= 30 days since last contact)
+  # Queue 2: Fresh new leads (Pending)
+  follow_up_queue = []
+  fresh_queue = []
+
   for row in rows:
+    status = row.get("Status", "Pending").strip()
+    last_contacted_str = row.get("Last_Contacted_Date", "").strip()
+
+    if status == "Touched_1" and last_contacted_str:
+      try:
+        last_date = datetime.strptime(last_contacted_str, "%Y-%m-%d").date()
+        days_since = (today - last_date).days
+        if days_since >= 30:
+          follow_up_queue.append(row)
+      except ValueError:
+        pass
+    elif status == "Pending":
+      fresh_queue.append(row)
+
+  # Combine execution list prioritizing follow-ups first, then filling remaining slots with fresh leads
+  execution_list = follow_up_queue + fresh_queue
+
+  for row in execution_list:
     if processed_count >= MAX_BATCH_SIZE:
       print(f"Reached maximum batch limit of {MAX_BATCH_SIZE} pitches for this run.")
       break
 
-    status = row.get("Status", "Pending").strip()
-    if status != "Pending":
-      continue  # Skip already contacted or on cooldown
-
     org_name = row.get("Organization_Name", "").strip()
     category = row.get("Category", "General B2B").strip()
+    status = row.get("Status", "Pending").strip()
     outreach_count = int(row.get("Outreach_Count", 0) or 0)
-
     angle = get_pitch_angle(category)
-    print(
-        f"[{processed_count + 1}/{MAX_BATCH_SIZE}] Generating pitch for"
-        f" {org_name} using [{angle}]..."
-    )
 
-    prompt = f"""
-    You are an expert B2B media sales director for The Star newspaper in Kenya (focusing on the high-impact MyGov national pullout).
-    Write a tailored, professional, and respectful B2B partnership pitch email to {org_name}, which operates in the '{category}' sector.
-    
-    The pitch must align with this strategic angle: {angle}.
-    Emphasize national reach, institutional visibility, and audience engagement across Kenya through The Star's platform.
-    
-    Format your response cleanly with:
-    Subject: [Compelling Subject Line]
-    
-    [Email Body - Professional, concise, punchy B2B pitch with a clear call to action]
-    """
+    is_follow_up = status == "Touched_1"
 
-    # 3-tier exponential backoff retry logic for 503 high demand errors
+    if is_follow_up:
+      print(
+          f"[{processed_count + 1}/{MAX_BATCH_SIZE}] Generating Touch 2 Follow-Up"
+          f" for {org_name}..."
+      )
+      prompt = f"""
+      You are an expert B2B media sales director for The Star newspaper in Kenya (focusing on the high-impact MyGov national pullout).
+      Write a polite, concise, and respectful second-touch follow-up email to {org_name} ({category} sector).
+      
+      The first pitch was sent ~4 weeks ago. This follow-up should politely bump the conversation, acknowledge their busy schedule, and reiterate the value of national institutional visibility across Kenya through The Star's platform under strategic angle: {angle}.
+      
+      Format your response cleanly with:
+      Subject: [Compelling Follow-Up Subject Line]
+      
+      [Email Body - Short, courteous follow-up pitch with a clear call to action]
+      """
+    else:
+      print(
+          f"[{processed_count + 1}/{MAX_BATCH_SIZE}] Generating Initial Pitch"
+          f" (Touch 1) for {org_name} using [{angle}]..."
+      )
+      prompt = f"""
+      You are an expert B2B media sales director for The Star newspaper in Kenya (focusing on the high-impact MyGov national pullout).
+      Write a tailored, professional, and respectful B2B partnership pitch email to {org_name}, which operates in the '{category}' sector.
+      
+      The pitch must align with this strategic angle: {angle}.
+      Emphasize national reach, institutional visibility, and audience engagement across Kenya through The Star's platform.
+      
+      Format your response cleanly with:
+      Subject: [Compelling Subject Line]
+      
+      [Email Body - Professional, concise, punchy B2B pitch with a clear call to action]
+      """
+
+    # Retry logic for 503 high demand errors
     success = False
     max_retries = 3
     pitch_content = ""
@@ -185,32 +221,42 @@ def main():
       if not safe_filename:
         safe_filename = f"target_{processed_count + 1}"
 
-      file_path = os.path.join(OUTPUT_DIR, f"pitch_{safe_filename}.md")
+      touch_label = "followup_touch2" if is_follow_up else "pitch_touch1"
+      file_path = os.path.join(OUTPUT_DIR, f"{touch_label}_{safe_filename}.md")
 
       with open(file_path, "w", encoding="utf-8") as out_f:
-        out_f.write(f"# Pitch Draft for {org_name}\n\n")
+        out_f.write(
+            f"# {'Follow-Up' if is_follow_up else 'Pitch'} Draft for"
+            f" {org_name}\n\n"
+        )
+        out_f.write(f"**Stage:** {'Touch 2 (Follow-Up)'}\n")
         out_f.write(f"**Target Contact:** {row.get('Contact_Email', 'N/A')}\n")
         out_f.write(f"**Target Category:** {category}\n")
         out_f.write(f"**Assigned Angle:** {angle}\n")
         out_f.write(f"**Generated On:** {today}\n\n---\n\n")
         out_f.write(pitch_content)
 
-      row["Status"] = "Touched_1" if outreach_count == 0 else "Touched_2"
+      # Update tracking status
+      if is_follow_up:
+        row["Status"] = "Touched_2"
+      else:
+        row["Status"] = "Touched_1"
+
       row["Outreach_Count"] = str(outreach_count + 1)
       row["Last_Contacted_Date"] = today.strftime("%Y-%m-%d")
       processed_count += 1
 
-    time.sleep(3)  # Rate limiting pause
+    time.sleep(3)
 
-  # 4. Save updated targets back to CSV
+  # Save updated targets back to CSV
   with open(CSV_PATH, mode="w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames)
     writer.writeheader()
     writer.writerows(rows)
 
   print(
-      f"Pipeline run completed. Generated {processed_count} pitch drafts and"
-      " updated targets.csv."
+      f"Pipeline run completed. Processed {processed_count} emails and updated"
+      " targets.csv."
   )
 
 
