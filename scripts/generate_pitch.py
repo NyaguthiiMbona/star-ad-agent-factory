@@ -12,18 +12,18 @@ def load_prompt(filepath):
     return ""
 
 def select_angle(category):
-    """Dynamically matches target category to the best pitch angle in copywriter.md."""
-    cat_lower = category.lower()
+    """Maps the 14 normalized DeepSeek categories to optimal pitch angles."""
+    cat = category.strip()
     
-    # Angle A: Agriculture & Climate
-    if any(k in cat_lower for k in ["agri", "food", "farmer", "climate", "environment", "conservation", "water"]):
+    # Angle A: Agriculture, Climate & Rural Development
+    if cat in ["Agriculture", "Research"]:
         return "Angle A: Agriculture, Climate & Rural Development"
     
-    # Angle B: Health & Social Impact
-    elif any(k in cat_lower for k in ["health", "child", "sanitation", "humanitarian", "disability", "education", "nutrition"]):
+    # Angle B: Health, Education & Social Impact
+    elif cat in ["Health", "Humanitarian", "Education/Culture", "Housing", "Sanitation"]:
         return "Angle B: Health, Education & Social Impact"
     
-    # Angle C: Governance & Public Diplomacy (Default for Embassies / Multilaterals)
+    # Angle C: Governance, Diplomacy, Energy & Economic Development
     else:
         return "Angle C: Public Diplomacy, Soft Power & Civic Governance"
 
@@ -73,20 +73,17 @@ def generate_pitches():
                 except ValueError:
                     pass
 
-            # Skip won or active prospects
             if status in ["Replied", "Won"]:
                 print(f"Skipping {row['Organization']} (Status: {status})")
                 updated_rows.append(row)
                 continue
 
-            # Check if currently sitting in 30-day cooldown
             if status == "Archived" and in_cooldown:
                 days_left = 30 - (today - last_date).days
                 print(f"Skipping {row['Organization']} - Active cooldown ({days_left} days remaining).")
                 updated_rows.append(row)
                 continue
 
-            # Reset status after 30-day cooldown completes for re-engagement
             if status == "Archived" and not in_cooldown:
                 print(f"Re-engaging {row['Organization']} - 30 days passed! Resetting for new pitch cycle.")
                 status = "Pending"
@@ -94,8 +91,8 @@ def generate_pitches():
 
             outreach_count += 1
             pitch_angle = select_angle(row.get("Category", ""))
+            location_str = f"{row.get('City', '')}, {row.get('Country', '')}"
 
-            # Tailor urgency based on touch count (Wed pitch vs Mon deadline follow-up)
             if outreach_count == 1:
                 pitch_type = f"INITIAL PITCH ({pitch_angle})"
                 urgency_note = (
@@ -114,7 +111,7 @@ def generate_pitches():
             user_prompt = f"""
             Pitch Type: {pitch_type}
             Target Organization: {row['Organization']}
-            Location/Base: {row['Location']}
+            Location: {location_str}
             Category: {row['Category']}
             Contact Person: {row['Contact_Name']}
             Campaign Focus: {row['Campaign_Focus']}
@@ -151,7 +148,6 @@ def generate_pitches():
                     out_file.write("----\n\n")
                     out_file.write(response.text)
 
-                # Update row state
                 row["Outreach_Count"] = str(outreach_count)
                 row["Last_Contacted_Date"] = today_str
                 row["Status"] = "Touched_1" if outreach_count == 1 else "Archived"
@@ -164,7 +160,6 @@ def generate_pitches():
 
             updated_rows.append(row)
 
-    # Write updated CSV back to dataset
     with open(targets_file, mode="w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
