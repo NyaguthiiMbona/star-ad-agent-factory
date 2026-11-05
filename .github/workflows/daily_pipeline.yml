@@ -1,7 +1,9 @@
 name: Ad Agent Pipeline
 
 on:
-  workflow_dispatch: # Allows you to run it manually anytime from GitHub website
+  workflow_dispatch: # Allows manual triggers anytime from GitHub website
+  schedule:
+    - cron: '0 6 * * 1' # Runs automatically every Monday at 06:00 UTC
 
 permissions:
   contents: write
@@ -26,12 +28,14 @@ jobs:
       - name: Run Prospecting & Pitch Generation
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python scripts/generate_pitch.py
+        run: python scripts/run_pipeline.py
 
       - name: Commit and Push Generated Pitches and Updated Targets
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
+          git status
           git add data/targets.csv generated_pitches/
-          git diff --staged --quiet || git commit -m "chore: generate pitch drafts and update outreach tracker [skip ci]"
+          git status
+          git diff --staged --quiet || git commit -m "chore: automated weekly pitch batch and tracker update [skip ci]"
           git push
