@@ -5,7 +5,6 @@ from datetime import datetime
 from google import genai
 from google.genai.errors import ServerError
 
-# Initialize Gemini Client
 client = genai.Client()
 
 TARGETS_FILE = "data/targets.csv"
@@ -14,6 +13,7 @@ PITCH_DIR = "generated_pitches"
 def load_targets():
     targets = []
     if not os.path.exists(TARGETS_FILE):
+        print(f"File not found: {TARGETS_FILE}")
         return targets
     with open(TARGETS_FILE, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -29,51 +29,15 @@ def save_targets(targets):
         writer.writerows(targets)
 
 def call_gemini_with_retry(model, contents, retries=3, delay=5):
-    """Wrapper function to handle temporary 503 high-demand errors smoothly."""
     for attempt in range(retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
         except ServerError as e:
             if attempt < retries - 1:
-                print(f"Server busy (503). Retrying in {delay} seconds... (Attempt {attempt + 1}/{retries})")
+                print(f"Server busy (503). Retrying in {delay}s... (Attempt {attempt + 1}/{retries})")
                 time.sleep(delay)
             else:
                 raise e
-
-def discover_new_prospects(existing_names, count=5):
-    prompt = f"""
-    Act as a senior B2B media partnership scout for Radio Africa Group in Nairobi, Kenya.
-    Identify {count} unique international NGOs, UN specialized agencies, regional development bodies, or donor-funded project implementers active in East Africa/Kenya.
-    EXCLUDE traditional commercial parastatals (e.g., Kenya Power, Kenya Pipeline).
-    EXCLUDE these already tracked entities: {', '.join(existing_names)}.
-    
-    Return ONLY raw CSV text with NO markdown code fences, NO explanation text, and NO header line.
-    Format each line strictly as:
-    "Organization_Name","Category","Contact_Email","Pending","0",""
-    """
-    try:
-        response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
-        text = response.text.replace('```csv', '').replace('```', '').strip()
-        
-        new_rows = []
-        for line in text.split('\n'):
-            line = line.strip()
-            if not line or line.startswith('Organization_Name'):
-                continue
-            parts = [p.strip().strip('"') for p in line.split(',')]
-            if len(parts) >= 3:
-                new_rows.append({
-                    "Organization_Name": parts[0],
-                    "Category": parts[1],
-                    "Contact_Email": parts[2],
-                    "Status": "Pending",
-                    "Outreach_Count": "0",
-                    "Last_Contacted_Date": ""
-                })
-        return new_rows
-    except Exception as e:
-        print(f"Scouting step skipped due to error: {e}")
-        return []
 
 def generate_pitch(org_name, category):
     prompt = f"""
@@ -91,28 +55,19 @@ def generate_pitch(org_name, category):
     return response.text
 
 def main():
+    print("Starting pipeline execution...")
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
+    print(f"Loaded {len(targets)} targets from CSV.")
     
-    pending_targets = [t for t in targets if t["Status"] == "Pending"]
-    
-    # Auto-scout if pending list is running low (single attempt, no infinite loop)
-    if len(pending_targets) < 5:
-        print("Pending queue low. Running prospect discovery...")
-        existing_names = [t["Organization_Name"] for t in targets]
-        new_leads = discover_new_prospects(existing_names, count=5)
-        if new_leads:
-            targets.extend(new_leads)
-            save_targets(targets)
-            pending_targets = [t for t in targets if t["Status"] == "Pending"]
-    
-    # Process up to 10 pitches per run
-    processed = 0
     today_str = datetime.now().strftime("%Y-%m-%d")
+    processed = 0
+    BATCH_LIMIT = 2  # Keep batch small so runs finish under 30 seconds
     
     for t in targets:
-        if t["Status"] == "Pending" and processed < 10:
-            print(f"Generating pitch for: {t['Organization_Name']}...")
+        if t["Status"] == "Pending" and processed < BATCH_LIMIT:
+            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']}...")
+            
             pitch_text = generate_pitch(t["Organization_Name"], t["Category"])
             
             clean_filename = "".join(c for c in t["Organization_Name"] if c.isalnum() or c in (' ', '_')).rstrip()
@@ -129,9 +84,10 @@ def main():
             t["Outreach_Count"] = "1"
             t["Last_Contacted_Date"] = today_str
             processed += 1
+            print(f"Saved: {filename}")
             
     save_targets(targets)
-    print(f"Pipeline executed successfully. Processed {processed} pitch(es).")
+    print(f"Pipeline finished! Successfully generated {processed} pitch(es).")
 
 if __name__ == "__main__":
     main()
