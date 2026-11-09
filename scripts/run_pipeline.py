@@ -39,7 +39,7 @@ def discover_new_prospects(existing_names, count=5):
     Ensure strings with commas are double-quoted. Status must be "Pending", Outreach_Count 0, Last_Contacted_Date empty.
     """
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.8-flash',
         contents=prompt
     )
     new_rows = []
@@ -67,7 +67,7 @@ def generate_pitch(org_name, category):
     Provide a Subject Line and Email Body.
     """
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.8-flash',
         contents=prompt
     )
     return response.text
