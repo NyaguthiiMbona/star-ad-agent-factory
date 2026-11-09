@@ -1,8 +1,10 @@
 import os
 import csv
+import time
 from datetime import datetime
 from google import genai
 from google.genai import types
+from google.genai.errors import ServerError
 
 # Initialize Gemini Client
 client = genai.Client()
@@ -27,6 +29,18 @@ def save_targets(targets):
         writer.writeheader()
         writer.writerows(targets)
 
+def call_gemini_with_retry(model, contents, retries=3, delay=5):
+    """Wrapper function to handle temporary 503 high-demand errors seamlessly."""
+    for attempt in range(retries):
+        try:
+            return client.models.generate_content(model=model, contents=contents)
+        except ServerError as e:
+            if attempt < retries - 1:
+                print(f"Server busy (503). Retrying in {delay} seconds... (Attempt {attempt + 1}/{retries})")
+                time.sleep(delay)
+            else:
+                raise e
+
 def discover_new_prospects(existing_names, count=5):
     prompt = f"""
     Act as a senior B2B media partnership scout for Radio Africa Group in Nairobi, Kenya.
@@ -38,7 +52,7 @@ def discover_new_prospects(existing_names, count=5):
     Organization_Name,Category,Contact_Email,Status,Outreach_Count,Last_Contacted_Date
     Ensure strings with commas are double-quoted. Status must be "Pending", Outreach_Count 0, Last_Contacted_Date empty.
     """
-    response = client.models.generate_content(
+    response = call_gemini_with_retry(
         model='gemini-3.8-flash',
         contents=prompt
     )
@@ -66,7 +80,7 @@ def generate_pitch(org_name, category):
     Keep the tone professional, institutional, and focused on donor impact.
     Provide a Subject Line and Email Body.
     """
-    response = client.models.generate_content(
+    response = call_gemini_with_retry(
         model='gemini-3.8-flash',
         contents=prompt
     )
