@@ -3,7 +3,6 @@ import csv
 import time
 from datetime import datetime
 from google import genai
-from google.genai import types
 from google.genai.errors import ServerError
 
 # Initialize Gemini Client
@@ -30,7 +29,7 @@ def save_targets(targets):
         writer.writerows(targets)
 
 def call_gemini_with_retry(model, contents, retries=3, delay=5):
-    """Wrapper function to handle temporary 503 high-demand errors seamlessly."""
+    """Wrapper function to handle temporary 503 high-demand errors smoothly."""
     for attempt in range(retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
@@ -48,25 +47,33 @@ def discover_new_prospects(existing_names, count=5):
     EXCLUDE traditional commercial parastatals (e.g., Kenya Power, Kenya Pipeline).
     EXCLUDE these already tracked entities: {', '.join(existing_names)}.
     
-    Return EXACTLY {count} CSV rows formatted as:
-    Organization_Name,Category,Contact_Email,Status,Outreach_Count,Last_Contacted_Date
-    Ensure strings with commas are double-quoted. Status must be "Pending", Outreach_Count 0, Last_Contacted_Date empty.
+    Return ONLY raw CSV text with NO markdown code fences, NO explanation text, and NO header line.
+    Format each line strictly as:
+    "Organization_Name","Category","Contact_Email","Pending","0",""
     """
-    response = call_gemini_with_retry(
-        model='gemini-3.8-flash',
-        contents=prompt
-    )
-    new_rows = []
-    for line in response.text.strip().split('\n'):
-        if line.startswith('Organization_Name') or not line.strip():
-            continue
-        try:
-            reader = csv.DictReader([line], fieldnames=["Organization_Name", "Category", "Contact_Email", "Status", "Outreach_Count", "Last_Contacted_Date"])
-            for row in reader:
-                new_rows.append(row)
-        except Exception:
-            continue
-    return new_rows
+    try:
+        response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
+        text = response.text.replace('```csv', '').replace('```', '').strip()
+        
+        new_rows = []
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('Organization_Name'):
+                continue
+            parts = [p.strip().strip('"') for p in line.split(',')]
+            if len(parts) >= 3:
+                new_rows.append({
+                    "Organization_Name": parts[0],
+                    "Category": parts[1],
+                    "Contact_Email": parts[2],
+                    "Status": "Pending",
+                    "Outreach_Count": "0",
+                    "Last_Contacted_Date": ""
+                })
+        return new_rows
+    except Exception as e:
+        print(f"Scouting step skipped due to error: {e}")
+        return []
 
 def generate_pitch(org_name, category):
     prompt = f"""
@@ -80,10 +87,7 @@ def generate_pitch(org_name, category):
     Keep the tone professional, institutional, and focused on donor impact.
     Provide a Subject Line and Email Body.
     """
-    response = call_gemini_with_retry(
-        model='gemini-3.8-flash',
-        contents=prompt
-    )
+    response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
     return response.text
 
 def main():
@@ -92,13 +96,15 @@ def main():
     
     pending_targets = [t for t in targets if t["Status"] == "Pending"]
     
-    # Auto-scout if pending list is running low
+    # Auto-scout if pending list is running low (single attempt, no infinite loop)
     if len(pending_targets) < 5:
+        print("Pending queue low. Running prospect discovery...")
         existing_names = [t["Organization_Name"] for t in targets]
         new_leads = discover_new_prospects(existing_names, count=5)
-        targets.extend(new_leads)
-        save_targets(targets)
-        pending_targets = [t for t in targets if t["Status"] == "Pending"]
+        if new_leads:
+            targets.extend(new_leads)
+            save_targets(targets)
+            pending_targets = [t for t in targets if t["Status"] == "Pending"]
     
     # Process up to 10 pitches per run
     processed = 0
@@ -106,6 +112,7 @@ def main():
     
     for t in targets:
         if t["Status"] == "Pending" and processed < 10:
+            print(f"Generating pitch for: {t['Organization_Name']}...")
             pitch_text = generate_pitch(t["Organization_Name"], t["Category"])
             
             clean_filename = "".join(c for c in t["Organization_Name"] if c.isalnum() or c in (' ', '_')).rstrip()
