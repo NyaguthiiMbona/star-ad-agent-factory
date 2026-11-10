@@ -44,8 +44,11 @@ def generate_pitch(org_name, category):
     You are a strategic B2B account manager at Radio Africa Group (RAG) pitching to {org_name} (Category: {category}).
     
     Structure a high-conversion cold email pitch emphasizing:
-    1. THE ANCHOR: The Star's official MyGov pullout for high-level policy, compliance, institutional transparency, and donor reporting.
-    2. THE OMNICHANNEL BUNDLE: Offer access to Radio Africa Group's broadcast network (Radio Jambo for mass Swahili rural reach, Classic 105 / Kiss 100 for urban reach, East FM, Homeboyz, or Gukena FM) for complete 360-degree grassroots community advocacy.
+    1. THE ANCHOR: The Star's official MyGov pullout for high-level policy compliance, institutional transparency, and official donor reporting.
+    2. TAILORED BROADCAST ASSETS BASED ON SECTOR:
+       - If Category is 'Agriculture & Climate': Highlight Radio Jambo (mass Swahili rural reach) and Gukena FM for grassroots farming and rural community engagement.
+       - If Category is 'Health & Social Impact': Highlight Kiss 100 for broad urban youth/young adult mobilization alongside Radio Jambo for wide-reaching community public health messaging.
+       - If Category is 'Civic Governance & Trade': Highlight The Star MyGov pullout anchor combined with Classic 105 and East FM for high-net-worth policy stakeholders and decision-makers.
     3. AGENCY ROUTING CLAUSE: Politely note that if their public notices, media buys, or advocacy campaigns in Kenya are managed via a retained media buying/PR agency (e.g., WPP Scangroup, Dentsu, Ogilvy, Redhouse), we welcome connecting directly with their account direction team to supply official institutional rate cards.
     
     Keep the tone professional, institutional, and focused on donor impact.
@@ -62,11 +65,11 @@ def main():
     
     today_str = datetime.now().strftime("%Y-%m-%d")
     processed = 0
-    BATCH_LIMIT = 2  # Keep batch small so runs finish under 30 seconds
+    BATCH_LIMIT = 2  # Keeps execution well within limits
     
     for t in targets:
         if t["Status"] == "Pending" and processed < BATCH_LIMIT:
-            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']}...")
+            print(f"[{processed+1}/{BATCH_LIMIT}] Generating sector-tailored pitch for: {t['Organization_Name']}...")
             
             pitch_text = generate_pitch(t["Organization_Name"], t["Category"])
             
