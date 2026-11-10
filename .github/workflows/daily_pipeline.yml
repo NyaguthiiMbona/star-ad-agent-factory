@@ -1,42 +1,40 @@
-name: Ad Agent Pipeline
+name: Weekly B2B Sales Pipeline
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 6 * * 1'
-
-permissions:
-  contents: write
+    # Runs every Tuesday at 03:00 UTC (6:00 AM EAT), preparing your batch ahead of Wednesday/Thursday
+    - cron: '0 3 * * 2'
+  workflow_dispatch: # Allows manual triggers anytime from the GitHub Actions tab
 
 jobs:
-  build:
+  run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    permissions:
+      contents: write
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install google-genai
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-genai
 
-    - name: Run Pipeline
-      env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      run: |
-        python scripts/run_pipeline.py
+      - name: Run B2B Pipeline Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python scripts/run_pipeline.py
 
-    - name: Commit and Push Changes
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add data/targets.csv generated_pitches/
-        git commit -m "Auto-generate pitches and update target statuses [skip ci]" || echo "No changes to commit"
-        git push
+      - name: Commit and Push Generated Pitches & Updated CSV
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add generated_pitches/ data/targets.csv
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Weekly outreach run: Generated fresh batch [skip ci]" && git push)
