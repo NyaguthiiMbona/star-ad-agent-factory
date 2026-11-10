@@ -41,11 +41,11 @@ def call_gemini_with_retry(model, contents, retries=3, delay=5):
 
 def generate_pitch(org_name, category):
     prompt = f"""
-    You are a strategic B2B account manager at Radio Africa Group (RAG) pitching to {org_name} (Category: {category}).
+    You are a strategic B2B sales representative at Radio Africa Group (RAG) pitching directly to decision-makers at {org_name} (Category: {category}).
     
     Structure a high-conversion B2B cold email pitch emphasizing:
     
-    1. THE ANCHOR: The Star's official MyGov pullout for high-level statutory notices, procurement disclosures, compliance, title deed/survey announcements, and donor transparency reporting.
+    1. THE ANCHOR: The Star's official MyGov pullout for statutory notices, procurement disclosures, compliance, title deed/survey announcements, and donor transparency reporting.
     
     2. TAILORED BROADCAST ASSETS (ROUTED BY SECTOR & AUDIENCE):
        - If Category is 'Agro-Machinery & Spares' or 'Regional Heavy Equipment': Highlight Radio Jambo (mass Swahili rural/farmer reach) and Gukena FM for direct regional equipment sales, spares awareness, and service hub announcements in regional centers like Eldoret, Nakuru, and Kitale.
@@ -57,6 +57,18 @@ def generate_pitch(org_name, category):
     
     3. AGENCY ROUTING CLAUSE: Politely note that if their public notices, media buys, or marketing campaigns in Kenya are managed via a retained media buying/PR agency, we welcome connecting directly with their account direction team to supply official institutional rate cards.
     
+    4. SIGNATURE:
+       End every pitch with this exact layout and your precise details (adapt only the Functional Role line to match the sector relevance):
+       
+       Warm regards,
+       
+       Ruth Njaramba
+       [Functional Role Line tailored to sector, e.g., Direct Commercial & Regional Accounts / Institutional Media Lead]
+       Radio Africa Group | The Star / MyGov
+       Nairobi & Regional Hubs, Kenya
+       Cell / WhatsApp: 0724233767
+       Email: ruth.njaramba@radioafricagroup.co.ke
+    
     Keep the tone professional, direct, commercial, and focused on clear utility and return on investment.
     Provide a Subject Line and Email Body.
     """
@@ -64,14 +76,14 @@ def generate_pitch(org_name, category):
     return response.text
 
 def main():
-    print("Starting pipeline execution with 70/30 Direct-Buy target logic...")
+    print("Starting pipeline execution with Ruth Njaramba's 70/30 Direct-Buy target logic...")
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
     print(f"Loaded {len(targets)} targets from CSV.")
     
     today_str = datetime.now().strftime("%Y-%m-%d")
     processed = 0
-    BATCH_LIMIT = 2  # Keep batch small so execution finishes under 30 seconds
+    BATCH_LIMIT = 2  # Keep batch small so execution finishes quickly and stays within quotas
     
     for t in targets:
         # Filter out any agency-routed or excluded accounts
