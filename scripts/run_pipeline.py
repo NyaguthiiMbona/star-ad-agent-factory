@@ -43,33 +43,44 @@ def generate_pitch(org_name, category):
     prompt = f"""
     You are a strategic B2B account manager at Radio Africa Group (RAG) pitching to {org_name} (Category: {category}).
     
-    Structure a high-conversion cold email pitch emphasizing:
-    1. THE ANCHOR: The Star's official MyGov pullout for high-level policy compliance, institutional transparency, and official donor reporting.
-    2. TAILORED BROADCAST ASSETS BASED ON SECTOR:
-       - If Category is 'Agriculture & Climate': Highlight Radio Jambo (mass Swahili rural reach) and Gukena FM for grassroots farming and rural community engagement.
-       - If Category is 'Health & Social Impact': Highlight Kiss 100 for broad urban youth/young adult mobilization alongside Radio Jambo for wide-reaching community public health messaging.
-       - If Category is 'Civic Governance & Trade': Highlight The Star MyGov pullout anchor combined with Classic 105 and East FM for high-net-worth policy stakeholders and decision-makers.
-    3. AGENCY ROUTING CLAUSE: Politely note that if their public notices, media buys, or advocacy campaigns in Kenya are managed via a retained media buying/PR agency (e.g., WPP Scangroup, Dentsu, Ogilvy, Redhouse), we welcome connecting directly with their account direction team to supply official institutional rate cards.
+    Structure a high-conversion B2B cold email pitch emphasizing:
     
-    Keep the tone professional, institutional, and focused on donor impact.
+    1. THE ANCHOR: The Star's official MyGov pullout for high-level statutory notices, procurement disclosures, compliance, title deed/survey announcements, and donor transparency reporting.
+    
+    2. TAILORED BROADCAST ASSETS (ROUTED BY SECTOR & AUDIENCE):
+       - If Category is 'Agro-Machinery & Spares' or 'Regional Heavy Equipment': Highlight Radio Jambo (mass Swahili rural/farmer reach) and Gukena FM for direct regional equipment sales, spares awareness, and service hub announcements in regional centers like Eldoret, Nakuru, and Kitale.
+       - If Category is 'Land Sacco & Real Estate' or 'Investment Trust': Highlight The Star/MyGov for legal title deed issuance and statutory AGM notices, combined with Classic 105 and East FM for high-trust executive/diaspora investor reach.
+       - If Category is 'TVET & Technical Education': Highlight Kiss 100 for high school leaver recruitment combined with Radio Jambo to reach fee-paying parents in rural and peri-urban regions.
+       - If Category is 'Faith-Based Healthcare & Medical Networks': Highlight Radio Jambo for mass public health mobilization and free medical camp announcements, alongside MyGov for institutional donor reporting.
+       - If Category is 'Agriculture & Climate' or 'Direct Research Hub': Highlight Radio Jambo for grassroots community advocacy alongside The Star MyGov pullout for official policy disclosures.
+       - For all other categories: Select the optimal combination from Kiss 100, Classic 105, Radio Jambo, East FM, Homeboyz Radio, or Gukena FM based on their primary target demographic.
+    
+    3. AGENCY ROUTING CLAUSE: Politely note that if their public notices, media buys, or marketing campaigns in Kenya are managed via a retained media buying/PR agency, we welcome connecting directly with their account direction team to supply official institutional rate cards.
+    
+    Keep the tone professional, direct, commercial, and focused on clear utility and return on investment.
     Provide a Subject Line and Email Body.
     """
     response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
     return response.text
 
 def main():
-    print("Starting pipeline execution...")
+    print("Starting pipeline execution with 70/30 Direct-Buy target logic...")
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
     print(f"Loaded {len(targets)} targets from CSV.")
     
     today_str = datetime.now().strftime("%Y-%m-%d")
     processed = 0
-    BATCH_LIMIT = 2  # Keeps execution well within limits
+    BATCH_LIMIT = 2  # Keep batch small so execution finishes under 30 seconds
     
     for t in targets:
+        # Filter out any agency-routed or excluded accounts
+        if t["Status"] in ["Excluded", "Agency_Routed"]:
+            print(f"Skipping {t['Organization_Name']} (Status: {t['Status']})")
+            continue
+
         if t["Status"] == "Pending" and processed < BATCH_LIMIT:
-            print(f"[{processed+1}/{BATCH_LIMIT}] Generating sector-tailored pitch for: {t['Organization_Name']}...")
+            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']} ({t['Category']})...")
             
             pitch_text = generate_pitch(t["Organization_Name"], t["Category"])
             
