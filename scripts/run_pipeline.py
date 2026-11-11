@@ -127,7 +127,9 @@ def generate_pitch(org_name, category, contact_name="", role=""):
        - If Category is 'Agriculture & Climate' or 'Direct Research Hub': Highlight Radio Jambo for grassroots community advocacy alongside The Star MyGov pullout for official policy disclosures.
        - For all other categories: Select the optimal combination from Kiss 100, Classic 105, Radio Jambo, East FM, Homeboyz Radio, or Gukena FM based on their primary target demographic.
     
-    3. AGENCY ROUTING CLAUSE: Politely note that if their public notices, media buys, or marketing campaigns in Kenya are managed via a retained media buying/PR agency, we welcome connecting directly with their account direction team to supply official institutional rate cards.
+    3. AGENCY ROUTING CLAUSE (Option B Formulation): 
+       Incorporate this precise positioning naturally into the email body:
+       "Should {org_name}'s media scheduling and advertising campaigns be handled by a retained agency, please feel free to forward this to your account directors so we can supply our latest MyGov and commercial rate cards."
     
     4. SIGNATURE:
        End every pitch with this exact layout and your precise details:
@@ -148,7 +150,7 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     return response.text
 
 def main():
-    print("Starting pipeline execution with Managing Director salutation & fallback handling...")
+    print("Starting pipeline execution with Option B agency routing & Managing Director defaults...")
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
     print(f"Loaded {len(targets)} targets from CSV.")
