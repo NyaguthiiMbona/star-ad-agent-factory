@@ -26,17 +26,14 @@ def load_targets():
         if not header:
             return targets
             
-        # Clean header whitespace
         header = [h.strip() for h in header]
         
         for row in reader:
             if not row or not any(row):
                 continue
-            # Map row values safely to standard dictionary keys
             row_padded = row + [''] * (len(header) - len(row))
             target_dict = dict(zip(header, row_padded))
             
-            # Ensure mandatory keys exist
             for key in ["Organization_Name", "Category", "Contact_Name", "Role", "Contact_Email", "Website_Domain", "Status", "Outreach_Count", "Last_Contacted_Date"]:
                 if key not in target_dict:
                     target_dict[key] = ""
@@ -108,7 +105,7 @@ def call_gemini_with_retry(model, contents, retries=3, delay=5):
                 raise e
 
 def generate_pitch(org_name, category, contact_name="", role=""):
-    """Constructs prompt and calls Gemini 2.5 Flash to write tailored B2B pitches."""
+    """Constructs prompt and calls Gemini 3.8 Flash to write tailored B2B pitches."""
     greeting = f"Dear {contact_name}," if contact_name else "Dear Decision Maker,"
     
     prompt = f"""
@@ -145,7 +142,7 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     Keep the tone professional, direct, commercial, and focused on clear utility and return on investment.
     Provide a Subject Line and Email Body.
     """
-    response = call_gemini_with_retry(model='gemini-2.5-flash', contents=prompt)
+    response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
     return response.text
 
 def main():
