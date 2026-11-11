@@ -68,7 +68,7 @@ def enrich_decision_maker_apollo(domain):
     payload = {
         "q_organization_domains": domain,
         "person_titles": [
-            "CEO", "Chief Executive Officer", "Managing Director", "Director", 
+            "Managing Director", "MD", "CEO", "Chief Executive Officer", "Director", 
             "Principal", "Procurement Manager", "Head of Procurement", 
             "General Secretary", "Head"
         ],
@@ -106,12 +106,14 @@ def call_gemini_with_retry(model, contents, retries=3, delay=5):
 
 def generate_pitch(org_name, category, contact_name="", role=""):
     """Constructs prompt and calls Gemini 3.8 Flash to write tailored B2B pitches."""
-    greeting = f"Dear {contact_name}," if contact_name else "Dear Decision Maker,"
+    greeting = f"Dear {contact_name}," if contact_name else "Dear Managing Director,"
+    target_role = role if role else "Managing Director"
     
     prompt = f"""
     You are a strategic B2B sales representative at Radio Africa Group (RAG) pitching directly to decision-makers at {org_name} (Category: {category}).
     
     Opening Salutation: {greeting}
+    Target Executive Title: {target_role}
     
     Structure a high-conversion B2B cold email pitch emphasizing:
     
@@ -128,12 +130,12 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     3. AGENCY ROUTING CLAUSE: Politely note that if their public notices, media buys, or marketing campaigns in Kenya are managed via a retained media buying/PR agency, we welcome connecting directly with their account direction team to supply official institutional rate cards.
     
     4. SIGNATURE:
-       End every pitch with this exact layout and your precise details (adapt only the Functional Role line to match the sector relevance):
+       End every pitch with this exact layout and your precise details:
        
        Warm regards,
        
        Ruth Njaramba
-       [Functional Role Line tailored to sector, e.g., Direct Commercial & Regional Accounts / Institutional Media Lead]
+       Direct Commercial & Institutional Accounts Lead
        Radio Africa Group | The Star / MyGov
        Nairobi & Regional Hubs, Kenya
        Cell / WhatsApp: 0724233767
@@ -145,70 +147,4 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
     return response.text
 
-def main():
-    print("Starting pipeline execution with Apollo.io enrichment & resilient CSV loading...")
-    os.makedirs(PITCH_DIR, exist_ok=True)
-    targets = load_targets()
-    print(f"Loaded {len(targets)} targets from CSV.")
-    
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    processed = 0
-    BATCH_LIMIT = 7
-    
-    for t in targets:
-        if t.get("Status") in ["Excluded", "Agency_Routed", "Excluded_Missing_Contact"]:
-            continue
-
-        if t.get("Status") == "Pending" and processed < BATCH_LIMIT:
-            email = t.get("Contact_Email", "").strip()
-            domain = t.get("Website_Domain", "").strip()
-            
-            if (not email or email.startswith("info@") or email.startswith("sales@")) and domain:
-                print(f"Enriching executive contact info for {domain} via Apollo.io...")
-                found_email, found_name, found_role = enrich_decision_maker_apollo(domain)
-                if found_email:
-                    t["Contact_Email"] = found_email
-                    if found_name:
-                        t["Contact_Name"] = found_name
-                    if found_role:
-                        t["Role"] = found_role
-                    email = found_email
-                    print(f"Enriched: {found_email} ({found_name or 'N/A'}, {found_role or 'N/A'})")
-
-            if not email and not domain:
-                print(f"Excluding {t['Organization_Name']}: Missing both Contact_Email and Website_Domain.")
-                t["Status"] = "Excluded_Missing_Contact"
-                continue
-
-            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']} ({t['Category']})...")
-            
-            pitch_text = generate_pitch(
-                t["Organization_Name"], 
-                t["Category"], 
-                contact_name=t.get("Contact_Name", ""), 
-                role=t.get("Role", "")
-            )
-            
-            clean_filename = "".join(c for c in t["Organization_Name"] if c.isalnum() or c in (' ', '_')).rstrip()
-            filename = os.path.join(PITCH_DIR, f"{clean_filename.replace(' ', '_')}_Pitch.md")
-            
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(f"# B2B Pitch: {t['Organization_Name']}\n")
-                f.write(f"**Contact Name:** {t.get('Contact_Name', 'N/A')}\n")
-                f.write(f"**Role:** {t.get('Role', 'N/A')}\n")
-                f.write(f"**Contact Email:** {t.get('Contact_Email', 'N/A')}\n")
-                f.write(f"**Category:** {t['Category']}\n")
-                f.write(f"**Generated:** {today_str}\n\n---\n\n")
-                f.write(pitch_text)
-                
-            t["Status"] = "Touched_1"
-            t["Outreach_Count"] = "1"
-            t["Last_Contacted_Date"] = today_str
-            processed += 1
-            print(f"Saved: {filename}")
-            
-    save_targets(targets)
-    print(f"Pipeline finished! Successfully processed {processed} pitch(es).")
-
-if __name__ == "__main__":
-    main()
+def main
