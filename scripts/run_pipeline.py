@@ -54,7 +54,7 @@ def save_targets(targets):
         writer.writerows(targets)
 
 def enrich_decision_maker_apollo(domain):
-    """Queries Apollo.io API to find executive decision-maker email and name for a domain."""
+    """Queries Apollo.io API with a strict 10-second timeout."""
     if not APOLLO_API_KEY or not domain:
         return None, None, None
 
@@ -87,19 +87,27 @@ def enrich_decision_maker_apollo(domain):
                     full_name = person.get("name", "").strip()
                     title = person.get("title", "").strip()
                     return email, full_name, title
+    except requests.exceptions.Timeout:
+        print(f"Apollo API timeout for domain {domain}. Skipping enrichment.")
     except Exception as err:
         print(f"Apollo API lookup warning for {domain}: {err}")
         
     return None, None, None
 
 def call_gemini_with_retry(model, contents, retries=3, delay=5):
-    """Calls the Gemini API with automatic retries on server load (503)."""
+    """Calls the Gemini API with automatic retries and safety timeout protection."""
     for attempt in range(retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
         except ServerError as e:
             if attempt < retries - 1:
                 print(f"Server busy (503). Retrying in {delay}s... (Attempt {attempt + 1}/{retries})")
+                time.sleep(delay)
+            else:
+                raise e
+        except Exception as e:
+            if attempt < retries - 1:
+                print(f"Gemini call error: {e}. Retrying in {delay}s... (Attempt {attempt + 1}/{retries})")
                 time.sleep(delay)
             else:
                 raise e
@@ -150,7 +158,7 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     return response.text
 
 def main():
-    print("Starting pipeline execution with Option B agency routing & Managing Director defaults...")
+    print("Starting pipeline execution with Bounced status check & timeouts...")
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
     print(f"Loaded {len(targets)} targets from CSV.")
@@ -160,7 +168,8 @@ def main():
     BATCH_LIMIT = 7
     
     for t in targets:
-        if t.get("Status") in ["Excluded", "Agency_Routed", "Excluded_Missing_Contact", "Touched_1"]:
+        # Skip targets marked as Excluded, Agency Routed, Missing Contact, already Touched, or Bounced
+        if t.get("Status") in ["Excluded", "Agency_Routed", "Excluded_Missing_Contact", "Touched_1", "Bounced"]:
             continue
 
         if t.get("Status") == "Pending" and processed < BATCH_LIMIT:
@@ -197,12 +206,16 @@ def main():
             contact_name = t.get("Contact_Name", "").strip()
             contact_role = t.get("Role", "").strip() or "Managing Director"
             
-            pitch_text = generate_pitch(
-                t["Organization_Name"], 
-                t["Category"], 
-                contact_name=contact_name, 
-                role=contact_role
-            )
+            try:
+                pitch_text = generate_pitch(
+                    t["Organization_Name"], 
+                    t["Category"], 
+                    contact_name=contact_name, 
+                    role=contact_role
+                )
+            except Exception as gen_err:
+                print(f"Failed to generate pitch for {t['Organization_Name']}: {gen_err}")
+                continue
             
             clean_filename = "".join(c for c in t["Organization_Name"] if c.isalnum() or c in (' ', '_')).rstrip()
             filename = os.path.join(PITCH_DIR, f"{clean_filename.replace(' ', '_')}_Pitch.md")
