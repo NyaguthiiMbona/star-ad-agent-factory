@@ -153,7 +153,7 @@ def main():
     
     today_str = datetime.now().strftime("%Y-%m-%d")
     processed = 0
-    BATCH_LIMIT = 2
+    BATCH_LIMIT = 7
     
     for t in targets:
         if t.get("Status") in ["Excluded", "Agency_Routed", "Excluded_Missing_Contact"]:
