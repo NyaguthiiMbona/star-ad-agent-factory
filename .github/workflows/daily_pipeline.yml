@@ -1,40 +1,41 @@
-name: Weekly B2B Sales Pipeline
+name: B2B Outreach Pipeline
 
 on:
   schedule:
-    # Runs every Tuesday at 03:00 UTC (6:00 AM EAT), preparing your batch ahead of Wednesday/Thursday
-    - cron: '0 3 * * 2'
-  workflow_dispatch: # Allows manual triggers anytime from the GitHub Actions tab
+    # Runs every Monday at 06:00 UTC (9:00 AM EAT)
+    - cron: '0 6 * * 1'
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions UI tab
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout Repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-genai
+          pip install google-genai requests
 
       - name: Run B2B Pipeline Script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
         run: |
           python scripts/run_pipeline.py
 
-      - name: Commit and Push Generated Pitches & Updated CSV
+      - name: Commit and Push Updated CSV and Pitches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          git add generated_pitches/ data/targets.csv
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Weekly outreach run: Generated fresh batch [skip ci]" && git push)
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/targets.csv generated_pitches/
+          git diff-index --quiet HEAD || git commit -m "Automated B2B outreach run [skip ci]"
+          git push
