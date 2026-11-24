@@ -4,10 +4,17 @@ import time
 import requests
 from datetime import datetime
 from google import genai
+from google.genai import types
 from google.genai.errors import ServerError
 
-# Initialize Gemini Client
-client = genai.Client()
+# Initialize Gemini Client with a strict 30-second HTTP timeout (30,000 ms)
+# and disable hidden SDK retry stacking so our explicit retry loop controls timing
+client = genai.Client(
+    http_options=types.HttpOptions(
+        timeout=30000,
+        retry_options=types.HttpRetryOptions(attempts=1)
+    )
+)
 
 TARGETS_FILE = "data/targets.csv"
 PITCH_DIR = "generated_pitches"
@@ -17,7 +24,7 @@ def load_targets():
     """Loads target entities from data/targets.csv safely handling variable column lengths."""
     targets = []
     if not os.path.exists(TARGETS_FILE):
-        print(f"File not found: {TARGETS_FILE}")
+        print(f"File not found: {TARGETS_FILE}", flush=True)
         return targets
         
     with open(TARGETS_FILE, mode='r', encoding='utf-8') as f:
@@ -88,26 +95,26 @@ def enrich_decision_maker_apollo(domain):
                     title = person.get("title", "").strip()
                     return email, full_name, title
     except requests.exceptions.Timeout:
-        print(f"Apollo API timeout for domain {domain}. Skipping enrichment.")
+        print(f"Apollo API timeout for domain {domain}. Skipping enrichment.", flush=True)
     except Exception as err:
-        print(f"Apollo API lookup warning for {domain}: {err}")
+        print(f"Apollo API lookup warning for {domain}: {err}", flush=True)
         
     return None, None, None
 
 def call_gemini_with_retry(model, contents, retries=3, delay=5):
-    """Calls the Gemini API with automatic retries and safety timeout protection."""
+    """Calls the Gemini API with automatic retries and strict 30s timeout protection."""
     for attempt in range(retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
         except ServerError as e:
             if attempt < retries - 1:
-                print(f"Server busy (503). Retrying in {delay}s... (Attempt {attempt + 1}/{retries})")
+                print(f"Server busy (503). Retrying in {delay}s... (Attempt {attempt + 1}/{retries})", flush=True)
                 time.sleep(delay)
             else:
                 raise e
         except Exception as e:
             if attempt < retries - 1:
-                print(f"Gemini call error: {e}. Retrying in {delay}s... (Attempt {attempt + 1}/{retries})")
+                print(f"Gemini call error/timeout: {e}. Retrying in {delay}s... (Attempt {attempt + 1}/{retries})", flush=True)
                 time.sleep(delay)
             else:
                 raise e
@@ -158,10 +165,10 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     return response.text
 
 def main():
-    print("Starting pipeline execution with Bounced status check & timeouts...")
+    print("Starting pipeline execution with 30s Gemini timeout & Bounced status check...", flush=True)
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
-    print(f"Loaded {len(targets)} targets from CSV.")
+    print(f"Loaded {len(targets)} targets from CSV.", flush=True)
     
     today_str = datetime.now().strftime("%Y-%m-%d")
     processed = 0
@@ -178,7 +185,7 @@ def main():
             
             # Step A: Query Apollo for executive contact info
             if (not email or email.startswith("info@") or email.startswith("sales@")) and domain:
-                print(f"Enriching executive contact info for {domain} via Apollo.io...")
+                print(f"Enriching executive contact info for {domain} via Apollo.io...", flush=True)
                 found_email, found_name, found_role = enrich_decision_maker_apollo(domain)
                 if found_email:
                     t["Contact_Email"] = found_email
@@ -187,21 +194,21 @@ def main():
                     if found_role:
                         t["Role"] = found_role
                     email = found_email
-                    print(f"Enriched: {found_email} ({found_name or 'N/A'}, {found_role or 'N/A'})")
+                    print(f"Enriched: {found_email} ({found_name or 'N/A'}, {found_role or 'N/A'})", flush=True)
 
             # Step B: Fallback to domain email if Apollo returns no email string
             if not email and domain:
                 email = f"info@{domain}"
                 t["Contact_Email"] = email
-                print(f"Apollo email not found for {domain}. Applying domain fallback: {email}")
+                print(f"Apollo email not found for {domain}. Applying domain fallback: {email}", flush=True)
 
             # Step C: Exclude only if missing both email and domain
             if not email and not domain:
-                print(f"Excluding {t['Organization_Name']}: Missing both Contact_Email and Website_Domain.")
+                print(f"Excluding {t['Organization_Name']}: Missing both Contact_Email and Website_Domain.", flush=True)
                 t["Status"] = "Excluded_Missing_Contact"
                 continue
 
-            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']} ({t['Category']})...")
+            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']} ({t['Category']})...", flush=True)
             
             contact_name = t.get("Contact_Name", "").strip()
             contact_role = t.get("Role", "").strip() or "Managing Director"
@@ -214,7 +221,7 @@ def main():
                     role=contact_role
                 )
             except Exception as gen_err:
-                print(f"Failed to generate pitch for {t['Organization_Name']}: {gen_err}")
+                print(f"Failed to generate pitch for {t['Organization_Name']}: {gen_err}", flush=True)
                 continue
             
             clean_filename = "".join(c for c in t["Organization_Name"] if c.isalnum() or c in (' ', '_')).rstrip()
@@ -233,10 +240,10 @@ def main():
             t["Outreach_Count"] = "1"
             t["Last_Contacted_Date"] = today_str
             processed += 1
-            print(f"Saved: {filename}")
+            print(f"Saved: {filename}", flush=True)
             
     save_targets(targets)
-    print(f"Pipeline finished! Successfully processed {processed} pitch(es).")
+    print(f"Pipeline finished! Successfully processed {processed} pitch(es).", flush=True)
 
 if __name__ == "__main__":
     main()
