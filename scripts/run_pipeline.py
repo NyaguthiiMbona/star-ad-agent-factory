@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 from google import genai
 from google.genai import types
-from google.genai.errors import ServerError
+from google.genai.errors import ServerError, ClientError
 
 # Initialize Gemini Client with a strict 30-second HTTP timeout (30,000 ms)
 # and disable hidden SDK retry stacking so our explicit retry loop controls timing
@@ -19,6 +19,10 @@ client = genai.Client(
 TARGETS_FILE = "data/targets.csv"
 PITCH_DIR = "generated_pitches"
 APOLLO_API_KEY = os.environ.get("APOLLO_API_KEY")
+
+class DailyQuotaExceededError(Exception):
+    """Raised when the Gemini API Free Tier daily request quota is exhausted."""
+    pass
 
 def load_targets():
     """Loads target entities from data/targets.csv safely handling variable column lengths."""
@@ -102,10 +106,22 @@ def enrich_decision_maker_apollo(domain):
     return None, None, None
 
 def call_gemini_with_retry(model, contents, retries=3, delay=5):
-    """Calls the Gemini API with automatic retries and strict 30s timeout protection."""
+    """Calls the Gemini API with automatic retries, failing fast if daily quota is exhausted."""
     for attempt in range(retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
+        except ClientError as e:
+            err_str = str(e)
+            if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
+                if "per day" in err_str.lower() or "PerDay" in err_str:
+                    raise DailyQuotaExceededError(err_str)
+                if attempt < retries - 1:
+                    print(f"Per-minute rate limit hit (429). Waiting 15s before retry... (Attempt {attempt + 1}/{retries})", flush=True)
+                    time.sleep(15)
+                else:
+                    raise e
+            else:
+                raise e
         except ServerError as e:
             if attempt < retries - 1:
                 print(f"Server busy (503). Retrying in {delay}s... (Attempt {attempt + 1}/{retries})", flush=True)
@@ -165,7 +181,7 @@ def generate_pitch(org_name, category, contact_name="", role=""):
     return response.text
 
 def main():
-    print("Starting pipeline execution with 30s Gemini timeout & Bounced status check...", flush=True)
+    print("Starting pipeline execution with 30s Gemini timeout & quota protection...", flush=True)
     os.makedirs(PITCH_DIR, exist_ok=True)
     targets = load_targets()
     print(f"Loaded {len(targets)} targets from CSV.", flush=True)
@@ -220,6 +236,9 @@ def main():
                     contact_name=contact_name, 
                     role=contact_role
                 )
+            except DailyQuotaExceededError:
+                print("Daily Gemini Free Tier quota exhausted (429 RESOURCE_EXHAUSTED). Halting batch cleanly until quota resets.", flush=True)
+                break
             except Exception as gen_err:
                 print(f"Failed to generate pitch for {t['Organization_Name']}: {gen_err}", flush=True)
                 continue
@@ -241,6 +260,10 @@ def main():
             t["Last_Contacted_Date"] = today_str
             processed += 1
             print(f"Saved: {filename}", flush=True)
+
+            # Pace requests to stay well within Free Tier RPM limits
+            if processed < BATCH_LIMIT:
+                time.sleep(4)
             
     save_targets(targets)
     print(f"Pipeline finished! Successfully processed {processed} pitch(es).", flush=True)
