@@ -1,272 +1,193 @@
-import os
 import csv
+import os
+import re
 import time
+from datetime import datetime, timezone
 import requests
-from datetime import datetime
 from google import genai
 from google.genai import types
-from google.genai.errors import ServerError, ClientError
+from google.genai.errors import APIError
 
-# Initialize Gemini Client with a strict 30-second HTTP timeout (30,000 ms)
-# and disable hidden SDK retry stacking so our explicit retry loop controls timing
+# --- CONFIGURATION ---
+CSV_PATH = "data/targets.csv"
+OUTPUT_DIR = "generated_pitches"
+MAX_LEADS_PER_RUN = 7
+FOLLOW_UP_DAYS = 30
+PACING_DELAY_SECONDS = 4
+APOLLO_TIMEOUT_SECONDS = 30
+
+# Multi-model failover chain to bypass free-tier 503 capacity spikes
+MODEL_CHAIN = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+]
+
+APOLLO_API_KEY = os.environ.get("APOLLO_API_KEY", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+
+if not GEMINI_API_KEY:
+    raise RuntimeError("Missing GEMINI_API_KEY environment variable.")
+
 client = genai.Client(
-    http_options=types.HttpOptions(
-        timeout=30000,
-        retry_options=types.HttpRetryOptions(attempts=1)
-    )
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(timeout=30000),  # 30s hard timeout per request
 )
 
-TARGETS_FILE = "data/targets.csv"
-PITCH_DIR = "generated_pitches"
-APOLLO_API_KEY = os.environ.get("APOLLO_API_KEY")
 
-class DailyQuotaExceededError(Exception):
-    """Raised when the Gemini API Free Tier daily request quota is exhausted."""
-    pass
+def get_today_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-def load_targets():
-    """Loads target entities from data/targets.csv safely handling variable column lengths."""
-    targets = []
-    if not os.path.exists(TARGETS_FILE):
-        print(f"File not found: {TARGETS_FILE}", flush=True)
-        return targets
-        
-    with open(TARGETS_FILE, mode='r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if not header:
-            return targets
-            
-        header = [h.strip() for h in header]
-        
-        for row in reader:
-            if not row or not any(row):
-                continue
-            row_padded = row + [''] * (len(header) - len(row))
-            target_dict = dict(zip(header, row_padded))
-            
-            for key in ["Organization_Name", "Category", "Contact_Name", "Role", "Contact_Email", "Website_Domain", "Status", "Outreach_Count", "Last_Contacted_Date"]:
-                if key not in target_dict:
-                    target_dict[key] = ""
-                    
-            targets.append(target_dict)
-            
-    return targets
 
-def save_targets(targets):
-    """Saves updated targets back to data/targets.csv with complete 9 headers."""
-    fieldnames = [
-        "Organization_Name", "Category", "Contact_Name", "Role", 
-        "Contact_Email", "Website_Domain", "Status", "Outreach_Count", "Last_Contacted_Date"
-    ]
-    with open(TARGETS_FILE, mode='w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(targets)
+def days_since(date_str: str) -> int:
+    if not date_str or not date_str.strip():
+        return -1
+    try:
+        past_date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+        today_date = datetime.now(timezone.utc).date()
+        return (today_date - past_date).days
+    except ValueError:
+        return -1
 
-def enrich_decision_maker_apollo(domain):
-    """Queries Apollo.io API with a strict 10-second timeout."""
-    if not APOLLO_API_KEY or not domain:
-        return None, None, None
 
-    url = "https://api.apollo.io/v1/people/search"
+def sanitize_filename(name: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", name.strip())
+    return cleaned.strip("_").lower()
+
+
+def get_radio_africa_routing(category: str) -> str:
+    cat = (category or "").lower()
+    if "tvet" in cat or "technical" in cat or "education" in cat:
+        return (
+            "Youth & Student Intake Reach (Kiss 100 & Radio Jambo) for prospective trainees/parents, "
+            "paired with Official Tender, Graduation & Accreditation Notices in The Star / MyGov."
+        )
+    if "sacco" in cat or "real estate" in cat or "investment" in cat:
+        return (
+            "Statutory & Legal Notice Credibility (The Star / MyGov) for AGM notices, title deed issuance "
+            "schedules, and land balloting updates, paired with High-Trust Executive & Diaspora Reach "
+            "(Classic 105 & East FM)."
+        )
+    if "agro" in cat or "machinery" in cat or "agriculture" in cat or "climate" in cat:
+        return (
+            "Grassroots Farmer & Agribusiness Reach (Radio Jambo & Regional Vernacular Stations) for "
+            "seasonal equipment/input campaigns, paired with Policy, Tender & Research Dissemination "
+            "in The Star / MyGov."
+        )
+    if "health" in cat or "medical" in cat or "hospital" in cat:
+        return (
+            "Community & Family Health Awareness (Radio Jambo & Classic 105) for specialist clinics and "
+            "outreach camps, paired with Institutional Procurement & Public Notices in The Star / MyGov."
+        )
+    return (
+        "National Print & Official Notice Credibility (The Star / MyGov) combined with Targeted "
+        "Commercial Broadcast Reach (Classic 105, Kiss 100, and Radio Jambo)."
+    )
+
+
+def enrich_contact_via_apollo(row: dict) -> dict:
+    """Attempts executive contact enrichment via Apollo.io while preserving fallback info@ emails."""
+    if not APOLLO_API_KEY:
+        return row
+
+    domain = (row.get("Website_Domain") or "").strip()
+    if not domain:
+        return row
+
+    # Skip Apollo lookup if we already have both a Contact_Name and a non-generic email
+    existing_email = (row.get("Contact_Email") or "").strip()
+    existing_name = (row.get("Contact_Name") or "").strip()
+    if existing_name and existing_email and not existing_email.lower().startswith("info@"):
+        return row
+
+    url = "https://api.apollo.io/api/v1/mixed_people/search"
     headers = {
-        "Cache-Control": "no-cache",
         "Content-Type": "application/json",
-        "api_key": APOLLO_API_KEY
+        "Cache-Control": "no-cache",
+        "X-Api-Key": APOLLO_API_KEY,
     }
-    
     payload = {
         "q_organization_domains": domain,
         "person_titles": [
-            "Managing Director", "MD", "CEO", "Chief Executive Officer", "Director", 
-            "Principal", "Procurement Manager", "Head of Procurement", 
-            "General Secretary", "Head"
+            "Managing Director",
+            "Chief Executive Officer",
+            "CEO",
+            "Principal",
+            "General Manager",
+            "Marketing Manager",
+            "Corporate Communications Manager",
+            "Head of Marketing",
+            "Procurement Manager",
         ],
         "page": 1,
-        "per_page": 5
+        "per_page": 3,
     }
-    
+
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            people = data.get("people", [])
-            for person in people:
-                email = person.get("email")
-                if email:
-                    full_name = person.get("name", "").strip()
-                    title = person.get("title", "").strip()
-                    return email, full_name, title
-    except requests.exceptions.Timeout:
-        print(f"Apollo API timeout for domain {domain}. Skipping enrichment.", flush=True)
-    except Exception as err:
-        print(f"Apollo API lookup warning for {domain}: {err}", flush=True)
-        
-    return None, None, None
+        resp = requests.post(url, json=payload, headers=headers, timeout=APOLLO_TIMEOUT_SECONDS)
+        if resp.status_code != 200:
+            print(f"  [Apollo] HTTP {resp.status_code} for {domain} — keeping existing contact details.")
+            return row
 
-def call_gemini_with_retry(model, contents, retries=3, delay=5):
-    """Calls the Gemini API with automatic retries, failing fast if daily quota is exhausted."""
-    for attempt in range(retries):
-        try:
-            return client.models.generate_content(model=model, contents=contents)
-        except ClientError as e:
-            err_str = str(e)
-            if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
-                if "per day" in err_str.lower() or "PerDay" in err_str:
-                    raise DailyQuotaExceededError(err_str)
-                if attempt < retries - 1:
-                    print(f"Per-minute rate limit hit (429). Waiting 15s before retry... (Attempt {attempt + 1}/{retries})", flush=True)
-                    time.sleep(15)
-                else:
-                    raise e
-            else:
-                raise e
-        except ServerError as e:
-            if attempt < retries - 1:
-                print(f"Server busy (503). Retrying in {delay}s... (Attempt {attempt + 1}/{retries})", flush=True)
-                time.sleep(delay)
-            else:
-                raise e
-        except Exception as e:
-            if attempt < retries - 1:
-                print(f"Gemini call error/timeout: {e}. Retrying in {delay}s... (Attempt {attempt + 1}/{retries})", flush=True)
-                time.sleep(delay)
-            else:
-                raise e
+        data = resp.json()
+        people = data.get("people") or []
+        for person in people:
+            email = (person.get("email") or "").strip()
+            if email and "email_not_unlocked" not in email.lower():
+                full_name = (person.get("name") or "").strip()
+                title = (person.get("title") or "").strip()
+                if full_name:
+                    row["Contact_Name"] = full_name
+                if title:
+                    row["Role"] = title
+                row["Contact_Email"] = email
+                print(f"  [Apollo] Enriched {domain} -> {full_name} ({title}) <{email}>")
+                return row
 
-def generate_pitch(org_name, category, contact_name="", role=""):
-    """Constructs prompt and calls Gemini 3.8 Flash to write tailored B2B pitches."""
-    greeting = f"Dear {contact_name}," if contact_name else "Dear Managing Director,"
-    target_role = role if role else "Managing Director"
-    
-    prompt = f"""
-    You are a strategic B2B sales representative at Radio Africa Group (RAG) pitching directly to decision-makers at {org_name} (Category: {category}).
-    
-    Opening Salutation: {greeting}
-    Target Executive Title: {target_role}
-    
-    Structure a high-conversion B2B cold email pitch emphasizing:
-    
-    1. THE ANCHOR: The Star's official MyGov pullout for statutory notices, procurement disclosures, compliance, title deed/survey announcements, and donor transparency reporting.
-    
-    2. TAILORED BROADCAST ASSETS (ROUTED BY SECTOR & AUDIENCE):
-       - If Category is 'Agro-Machinery & Spares' or 'Regional Heavy Equipment': Highlight Radio Jambo (mass Swahili rural/farmer reach) and Gukena FM for direct regional equipment sales, spares awareness, and service hub announcements in regional centers like Eldoret, Nakuru, and Kitale.
-       - If Category is 'Land Sacco & Real Estate' or 'Investment Trust': Highlight The Star/MyGov for legal title deed issuance and statutory AGM notices, combined with Classic 105 and East FM for high-trust executive/diaspora investor reach.
-       - If Category is 'TVET & Technical Education': Highlight Kiss 100 for high school leaver recruitment combined with Radio Jambo to reach fee-paying parents in rural and peri-urban regions.
-       - If Category is 'Faith-Based Healthcare & Medical Networks': Highlight Radio Jambo for mass public health mobilization and free medical camp announcements, alongside MyGov for institutional donor reporting.
-       - If Category is 'Agriculture & Climate' or 'Direct Research Hub': Highlight Radio Jambo for grassroots community advocacy alongside The Star MyGov pullout for official policy disclosures.
-       - For all other categories: Select the optimal combination from Kiss 100, Classic 105, Radio Jambo, East FM, Homeboyz Radio, or Gukena FM based on their primary target demographic.
-    
-    3. AGENCY ROUTING CLAUSE (Option B Formulation): 
-       Incorporate this precise positioning naturally into the email body:
-       "Should {org_name}'s media scheduling and advertising campaigns be handled by a retained agency, please feel free to forward this to your account directors so we can supply our latest MyGov and commercial rate cards."
-    
-    4. SIGNATURE:
-       End every pitch with this exact layout and your precise details:
-       
-       Warm regards,
-       
-       Ruth Njaramba
-       Direct Commercial & Institutional Accounts Lead
-       Radio Africa Group | The Star / MyGov
-       Nairobi & Regional Hubs, Kenya
-       Cell / WhatsApp: 0724233767
-       Email: ruth.njaramba@radioafricagroup.co.ke
-    
-    Keep the tone professional, direct, commercial, and focused on clear utility and return on investment.
-    Provide a Subject Line and Email Body.
-    """
-    response = call_gemini_with_retry(model='gemini-3.8-flash', contents=prompt)
-    return response.text
+        print(f"  [Apollo] No unlocked executive email for {domain} — keeping fallback ({existing_email or 'none'}).")
+    except Exception as exc:
+        print(f"  [Apollo] Lookup skipped for {domain} due to error: {exc}")
 
-def main():
-    print("Starting pipeline execution with 30s Gemini timeout & quota protection...", flush=True)
-    os.makedirs(PITCH_DIR, exist_ok=True)
-    targets = load_targets()
-    print(f"Loaded {len(targets)} targets from CSV.", flush=True)
-    
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    processed = 0
-    BATCH_LIMIT = 7
-    
-    for t in targets:
-        # Skip targets marked as Excluded, Agency Routed, Missing Contact, already Touched, or Bounced
-        if t.get("Status") in ["Excluded", "Agency_Routed", "Excluded_Missing_Contact", "Touched_1", "Bounced"]:
-            continue
+    return row
 
-        if t.get("Status") == "Pending" and processed < BATCH_LIMIT:
-            email = t.get("Contact_Email", "").strip()
-            domain = t.get("Website_Domain", "").strip()
-            
-            # Step A: Query Apollo for executive contact info
-            if (not email or email.startswith("info@") or email.startswith("sales@")) and domain:
-                print(f"Enriching executive contact info for {domain} via Apollo.io...", flush=True)
-                found_email, found_name, found_role = enrich_decision_maker_apollo(domain)
-                if found_email:
-                    t["Contact_Email"] = found_email
-                    if found_name:
-                        t["Contact_Name"] = found_name
-                    if found_role:
-                        t["Role"] = found_role
-                    email = found_email
-                    print(f"Enriched: {found_email} ({found_name or 'N/A'}, {found_role or 'N/A'})", flush=True)
 
-            # Step B: Fallback to domain email if Apollo returns no email string
-            if not email and domain:
-                email = f"info@{domain}"
-                t["Contact_Email"] = email
-                print(f"Apollo email not found for {domain}. Applying domain fallback: {email}", flush=True)
+def build_first_touch_prompt(row: dict) -> str:
+    org_name = row.get("Organization_Name", "").strip()
+    category = row.get("Category", "").strip()
+    contact_name = row.get("Contact_Name", "").strip()
+    role = row.get("Role", "").strip()
+    email = row.get("Contact_Email", "").strip()
+    domain = row.get("Website_Domain", "").strip()
+    routing_angles = get_radio_africa_routing(category)
 
-            # Step C: Exclude only if missing both email and domain
-            if not email and not domain:
-                print(f"Excluding {t['Organization_Name']}: Missing both Contact_Email and Website_Domain.", flush=True)
-                t["Status"] = "Excluded_Missing_Contact"
-                continue
+    salutation = f"Dear {contact_name}," if contact_name else f"Dear {role or 'Managing Director / Principal'},"
 
-            print(f"[{processed+1}/{BATCH_LIMIT}] Generating pitch for: {t['Organization_Name']} ({t['Category']})...", flush=True)
-            
-            contact_name = t.get("Contact_Name", "").strip()
-            contact_role = t.get("Role", "").strip() or "Managing Director"
-            
-            try:
-                pitch_text = generate_pitch(
-                    t["Organization_Name"], 
-                    t["Category"], 
-                    contact_name=contact_name, 
-                    role=contact_role
-                )
-            except DailyQuotaExceededError:
-                print("Daily Gemini Free Tier quota exhausted (429 RESOURCE_EXHAUSTED). Halting batch cleanly until quota resets.", flush=True)
-                break
-            except Exception as gen_err:
-                print(f"Failed to generate pitch for {t['Organization_Name']}: {gen_err}", flush=True)
-                continue
-            
-            clean_filename = "".join(c for c in t["Organization_Name"] if c.isalnum() or c in (' ', '_')).rstrip()
-            filename = os.path.join(PITCH_DIR, f"{clean_filename.replace(' ', '_')}_Pitch.md")
-            
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(f"# B2B Pitch: {t['Organization_Name']}\n")
-                f.write(f"**Contact Name:** {contact_name or 'N/A'}\n")
-                f.write(f"**Role:** {contact_role}\n")
-                f.write(f"**Contact Email:** {t.get('Contact_Email', 'N/A')}\n")
-                f.write(f"**Category:** {t['Category']}\n")
-                f.write(f"**Generated:** {today_str}\n\n---\n\n")
-                f.write(pitch_text)
-                
-            t["Status"] = "Touched_1"
-            t["Outreach_Count"] = "1"
-            t["Last_Contacted_Date"] = today_str
-            processed += 1
-            print(f"Saved: {filename}", flush=True)
+    return f"""You are a senior B2B commercial account executive at Radio Africa Group in Nairobi, Kenya.
+Write a crisp, high-converting initial B2B outreach email pitching Radio Africa Group's integrated print (The Star / MyGov) and broadcast (Classic 105, Kiss 100, Radio Jambo, East FM) advertising solutions.
 
-            # Pace requests to stay well within Free Tier RPM limits
-            if processed < BATCH_LIMIT:
-                time.sleep(4)
-            
-    save_targets(targets)
-    print(f"Pipeline finished! Successfully processed {processed} pitch(es).", flush=True)
+Target Details:
+- Organization Name: {org_name}
+- Sector / Category: {category}
+- Contact Name: {contact_name or "Not specified"}
+- Role: {role or "Executive Leadership"}
+- Recipient Email: {email}
+- Website Domain: {domain}
+- Recommended Radio Africa Group Media Angles: {routing_angles}
 
-if __name__ == "__main__":
-    main()
+Strict Requirements:
+1. Format the top clearly with:
+   To: {email}
+   Subject: [Compelling, specific subject line tailored to {org_name}]
+2. Open with "{salutation}"
+3. Keep the body concise (160–220 words), practical, and tailored specifically to {org_name}'s sector in Kenya.
+4. Highlight 2 concrete value pillars matching the recommended Radio Africa Group media angles above.
+5. Include one polite sentence noting that if their media buying/advertising is handled by a retained agency, they can forward the note to their account director for rate cards.
+6. End with a low-friction call to action for a brief 10-minute call this week.
+7. Use this exact signature block verbatim:
+Warm regards,
+
+Ruth Njaramba
+Direct Commercial & Institutional Accounts Lead
+Radio Africa Group | The Star / MyGov
+Nairobi & Regional Hubs, Kenya
+Cell / WhatsApp: 07242337
