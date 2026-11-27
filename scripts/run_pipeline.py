@@ -16,11 +16,11 @@ FOLLOW_UP_DAYS = 30
 PACING_DELAY_SECONDS = 4
 APOLLO_TIMEOUT_SECONDS = 30
 
-# Multi-model failover chain to bypass free-tier 503 capacity spikes
+# Updated active Gemini Flash / Flash-Lite failover chain
 MODEL_CHAIN = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
 ]
 
 APOLLO_API_KEY = os.environ.get("APOLLO_API_KEY", "").strip()
